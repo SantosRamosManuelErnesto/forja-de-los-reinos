@@ -72,10 +72,10 @@ const fields=[
 const bounds=Object.fromEntries(['density_gcm3','hardness_HV_or_J','E_GPa','elongation_pct','YS_MPa','UTS_MPa'].map(k=>[k,[Math.min(...ALLOYS.map(a=>a[k])),Math.max(...ALLOYS.map(a=>a[k]))]]));
 const rounds=[{name:'Impacto frontal',factor:1,angle:0,description:'Choque directo de los filos.'},{name:'Desvío lateral',factor:.82,angle:32,description:'Carga oblicua que favorece la flexión.'},{name:'Golpe decisivo',factor:1.24,angle:12,description:'Mayor energía y daño acumulado.'}];
 const MOVES={
- ataque:{icon:'⚔️',name:'Ataque fuerte',desc:'Más potencia, pero quedas expuesto. Favorece hojas resistentes.',attack:1.27,guard:.88,agility:.88},
- defensa:{icon:'🛡️',name:'Defensa firme',desc:'Reduce el daño recibido; útil con buena rigidez y límite elástico.',attack:.76,guard:1.37,agility:.82},
- esquiva:{icon:'💨',name:'Esquiva rápida',desc:'Evita parte del impacto. Funciona mejor con espadas ligeras.',attack:.77,guard:.96,agility:1.42},
- contraataque:{icon:'↪️',name:'Contraataque',desc:'Responde al ataque rival. Requiere equilibrio entre resistencia y rapidez.',attack:1.06,guard:1.06,agility:1.08}
+ ataque:{icon:'⚔️',name:'Filo de Acero',desc:'Dureza y resistencia: golpe intenso, con riesgo de melladura si la hoja es frágil.',property:'Dureza + resistencia',attack:1.27,guard:.88,agility:.88},
+ defensa:{icon:'🛡️',name:'Guardia Tenaz',desc:'Tenacidad aproximada y límite elástico: absorbe el choque y protege contra el doblamiento.',property:'Elongación + límite elástico',attack:.76,guard:1.37,agility:.82},
+ esquiva:{icon:'💨',name:'Danza Ligera',desc:'Masa y distribución del peso: facilita retirar y recolocar la espada con rapidez.',property:'Masa + inercia',attack:.77,guard:.96,agility:1.42},
+ contraataque:{icon:'↪️',name:'Réplica Elástica',desc:'Rigidez y límite elástico: desvía el impacto y recupera el control sin deformarse.',property:'Módulo elástico + límite elástico',attack:1.06,guard:1.06,agility:1.08}
 };
 let state,anim=0;function fresh(){return {realm:null,preferences:[5,5,5,5,5,5,5,5],length:85,width:5,thickness:6,velocity:12,angle:25,edge:'equilibrado',treatment:'estándar',style:'equilibrado',alloy:null,mass:0,match:0,damage:0,points:0}};
 function reset(){anim++;state={phase:1,players:[fresh(),fresh()],turn:0,round:0,logs:[],outcome:null,tactics:[null,null],tacticTurn:0};render()}
@@ -97,11 +97,12 @@ function simulate(i){
  let r=rounds[i],data=state.players.map(stats),detail=[];
  state.players.forEach((p,j)=>{
   let rival=state.players[1-j],move=MOVES[state.tactics[j]],enemy=MOVES[state.tactics[1-j]],a=p.alloy;
-  let light=clamp(1.4-p.mass/2,.55,1.25),duct=clamp(a.elongation_pct/15,.65,1.35);
-  let dodge=state.tactics[j]==='esquiva'?clamp(.48+.24*light,.40,.83):0;
-  let counter=state.tactics[1-j]==='contraataque'&&state.tactics[j]==='ataque'?1.24:1;
-  let guard=move.guard*(state.tactics[j]==='defensa'?clamp(.85+a.YS_MPa/1800,1,1.48):1);
-  let impact=data[1-j].ke*r.factor*enemy.attack*counter*(1+Math.sin((r.angle+p.angle)*Math.PI/180)*.35)*(1-dodge)/guard;
+  let light=clamp(1.4-p.mass/2,.55,1.25),duct=clamp(a.elongation_pct/15,.65,1.35),elastic=clamp(a.E_GPa/190,.72,1.24),yieldFactor=clamp(a.YS_MPa/650,.72,1.32),hardnessFactor=clamp(a.hardness_HV_or_J/250,.72,1.30);
+  let dodge=state.tactics[j]==='esquiva'?clamp(.40+.31*light,.35,.82):0;
+  let counter=state.tactics[1-j]==='contraataque'&&state.tactics[j]==='ataque'?clamp(1.04+.13*elastic+.12*yieldFactor,1.10,1.40):1;
+  let guard=move.guard*(state.tactics[j]==='defensa'?clamp(.68+.31*yieldFactor+.24*duct,1,1.55):1)*(state.tactics[j]==='contraataque'?clamp(.8+.14*elastic+.13*yieldFactor,.92,1.18):1);
+  let enemyEdge=state.tactics[1-j]==='ataque'?clamp(.73+.16*hardnessFactor+.16*clamp(state.players[1-j].alloy.UTS_MPa/850,.7,1.4),.82,1.23):1;
+  let impact=data[1-j].ke*r.factor*enemy.attack*enemyEdge*counter*(1+Math.sin((r.angle+p.angle)*Math.PI/180)*.35)*(1-dodge)/guard;
   let geom=(85/p.length)**.5*(p.thickness/6)**1.55*(p.width/5)**.35,angle=1+.35*Math.sin((r.angle+p.angle)*Math.PI/180);
   let power=p.style==='potencia'?1.14:p.style==='rapidez'?.91:1,edge=p.edge==='fino'?1.17:p.edge==='robusto'?.87:1,treat=p.treatment==='endurecido'?1.11:p.treatment==='pulido'?.95:1;
   let bend=impact/(Math.max(1,a.YS_MPa)*geom*1.9)*angle*power;
@@ -112,7 +113,7 @@ function simulate(i){
   let failure=bend>chip&&bend>fracture?'doblamiento':fracture>chip?'fractura':'melladura';
   detail.push({bend,chip,fracture,delta,failure,impact,ke:data[j].ke,geom,move:state.tactics[j],dodge,guard,duct});
  });
- let scores=state.players.map((p,j)=>{let a=p.alloy,d=detail[j];let momentum=state.tactics[j]==='ataque'?4:state.tactics[j]==='contraataque'&&state.tactics[1-j]==='ataque'?7:state.tactics[j]==='defensa'?3:0;return clamp(100-26*p.damage+Math.min(13,a.YS_MPa/160)+Math.min(9,a.hardness_HV_or_J/70)+Math.min(8,a.elongation_pct/6)+Math.min(8,d.ke/140)+momentum,0,140)});
+ let scores=state.players.map((p,j)=>{let a=p.alloy,d=detail[j];let momentum=state.tactics[j]==='ataque'?4*clamp(a.hardness_HV_or_J/250,.7,1.5):state.tactics[j]==='contraataque'&&state.tactics[1-j]==='ataque'?5*clamp(a.E_GPa/180,.7,1.4):state.tactics[j]==='defensa'?3*clamp(a.YS_MPa/650,.7,1.4):state.tactics[j]==='esquiva'?4*clamp(1.5-p.mass/2,.5,1.5):0;return clamp(100-26*p.damage+Math.min(13,a.YS_MPa/160)+Math.min(9,a.hardness_HV_or_J/70)+Math.min(8,a.elongation_pct/6)+Math.min(8,d.ke/140)+momentum,0,140)});
  let winner=scores[0]===scores[1]?-1:scores[0]>scores[1]?0:1;
  if(winner!==-1)state.players[winner].points++;
  let log={round:i,detail,scores,winner,moves:[...state.tactics]};state.logs.push(log);return log;
@@ -121,7 +122,7 @@ function battle(){
  let r=rounds[state.round];
  if(!state.tactics.every(Boolean)){
   let j=state.tacticTurn;
-  $('#game-content').innerHTML=head(`FASE 4 · RONDA ${state.round+1} DE 3 · DECISIONES`)+`<div class="panel"><div class="kicker">${r.name}</div><h2>${j===0?'Jugador 1 · Guerrero azul':'Jugador 2 · Guerrero carmesí'}</h2><p>Elige un movimiento para esta ronda. <strong>No necesitas volver a configurar tu espada.</strong> La decisión se guarda en secreto hasta que ambos hayan elegido.</p><div class="move-grid">${Object.entries(MOVES).map(([id,m])=>`<button class="move-card" data-move="${id}"><span class="move-icon">${m.icon}</span><strong>${m.name}</strong><small>${m.desc}</small></button>`).join('')}</div><p class="notice">${j===0?'Después de elegir, entrega el dispositivo al jugador 2.':'Tu rival ya eligió. Tu movimiento determinará la escena de combate.'}</p><div class="center"><button class="btn secondary" id="see-prev" type="button">${state.round===0?'Ver instrucciones':'Ver historial de rondas'}</button></div><div id="history-box" class="hidden">${state.logs.map(l=>`<p>Ronda ${l.round+1}: ${l.winner<0?'Empate':`ganó jugador ${l.winner+1}`}</p>`).join('')||'<p>Las reglas: ataque presiona, defensa resiste, esquiva usa ligereza y contraataque responde al ataque.</p>'}</div></div>`;
+  $('#game-content').innerHTML=head(`FASE 4 · RONDA ${state.round+1} DE 3 · DECISIONES`)+`<div class="panel"><div class="kicker">${r.name}</div><h2>${j===0?'Jugador 1 · Guerrero azul':'Jugador 2 · Guerrero carmesí'}</h2><p>Elige un movimiento para esta ronda. <strong>No necesitas volver a configurar tu espada.</strong> La decisión se guarda en secreto hasta que ambos hayan elegido.</p><div class="move-grid">${Object.entries(MOVES).map(([id,m])=>`<button class="move-card" data-move="${id}"><span class="move-icon">${m.icon}</span><strong>${m.name}</strong><small><b>${m.property}</b><br>${m.desc}</small></button>`).join('')}</div><p class="notice">${j===0?'Después de elegir, entrega el dispositivo al jugador 2.':'Tu rival ya eligió. Tu movimiento determinará la escena de combate.'}</p><div class="center"><button class="btn secondary" id="see-prev" type="button">${state.round===0?'Ver instrucciones':'Ver historial de rondas'}</button></div><div id="history-box" class="hidden">${state.logs.map(l=>`<p>Ronda ${l.round+1}: ${l.winner<0?'Empate':`ganó jugador ${l.winner+1}`}</p>`).join('')||'<p>Las reglas: cada técnica aprovecha distintas propiedades del material.</p>'}</div></div>`;
   $$('[data-move]').forEach(b=>b.onclick=()=>{state.tactics[j]=b.dataset.move;if(j===0){state.tacticTurn=1;$('#game-content').innerHTML=head('MOVIMIENTO SELLADO')+`<div class="panel center" style="padding:50px 20px"><h2>🔒 Turno del jugador 2</h2><p>El movimiento del jugador 1 está oculto. Entrega el dispositivo.</p><button class="btn red" id="take-turn">Elegir mi movimiento</button></div>`;$('#take-turn').onclick=()=>battle()}else{state.tacticTurn=0;battle()}});
   $('#see-prev').onclick=()=>$('#history-box').classList.toggle('hidden');return;
  }
@@ -167,8 +168,8 @@ ctx.fillStyle=color;ctx.fillRect(4,-145,12,3);ctx.fillStyle='#d8c18b';ctx.beginP
  ctx.fillStyle='#f1d59d';ctx.beginPath();ctx.arc(-43,-67,5,0,7);ctx.fill();
 
  // brazo armado y espada con posiciones distintas según el movimiento
- const attack=pose==='strike'||pose==='clash'||pose==='victory', arm=attack?[-3,-129,42,-132]:pose==='guard'?[19,-106,38,-119]:pose==='dodge'?[19,-106,35,-66]:[19,-106,39,-83];ctx.strokeStyle='#aebbc8';ctx.lineWidth=12;ctx.beginPath();ctx.moveTo(arm[0],arm[1]);ctx.lineTo(arm[2],arm[3]);ctx.stroke();
- ctx.save();ctx.translate(arm[2],arm[3]);ctx.rotate(attack?-.85:pose==='guard'?.92:pose==='dodge'?1.55:.15);ctx.scale(.57,.57);sword(ctx,0,0,0,color,1,weaponFailure,pose==='clash'?0.9:0.2);ctx.restore();
+ const attack=pose==='strike'||pose==='clash'||pose==='victory'||pose==='riposte', arm=attack?[-3,-129,42,-132]:pose==='guard'?[19,-106,38,-119]:pose==='riposte'?[19,-106,52,-154]:pose==='dodge'?[19,-106,35,-66]:[19,-106,39,-83];ctx.strokeStyle='#aebbc8';ctx.lineWidth=12;ctx.beginPath();ctx.moveTo(arm[0],arm[1]);ctx.lineTo(arm[2],arm[3]);ctx.stroke();
+ ctx.save();ctx.translate(arm[2],arm[3]);ctx.rotate(pose==='riposte'?-1.5:attack?-.85:pose==='guard'?.92:pose==='dodge'?1.55:.15);ctx.scale(.57,.57);sword(ctx,0,0,0,color,1,weaponFailure,pose==='clash'?0.9:0.2);ctx.restore();
  if(pose==='victory'){ctx.fillStyle='#f4d28c';ctx.font='bold 20px Cinzel,serif';ctx.fillText('✦',-9,-208)}
  ctx.restore();
 }
@@ -177,7 +178,7 @@ function animate(log){
  const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
  const duration=reduced?1700:15500, start=performance.now();
  const result=log.winner, damaged=log.detail.map(d=>d.failure);
- const scenes=[{end:.12,name:'I · LA FRAGUA DESPIERTA',info:'El metal se calienta antes de recibir los golpes del martillo.'},{end:.25,name:'II · TEMPLADO Y PREPARACIÓN',info:'La geometría y las propiedades de la aleación condicionan la hoja.'},{end:.37,name:'III · ENTRADA A LA ARENA',info:'Los guerreros avanzan con sus espadas y escudos.'},{end:.50,name:'IV · PRIMER INTERCAMBIO',info:'Ataque frontal y bloqueo: intervienen dureza y resistencia.'},{end:.63,name:'V · CONTRAATAQUE Y ESQUIVA',info:'Los combatientes retroceden, esquivan y vuelven a atacar.'},{end:.76,name:'VI · CHOQUE DE ACERO',info:'El impacto produce flexión, desgaste y posible melladura.'},{end:.87,name:'VII · ÚLTIMO ASALTO',info:'El daño acumulado influye en la resistencia restante.'},{end:1,name:'VIII · VEREDICTO DEL DUELO',info:'La simulación determina la ventaja mediante índices mecánicos.'}];
+ const scenes=[{end:.12,name:'I · LA FRAGUA DESPIERTA',info:'El metal se calienta antes de recibir los golpes del martillo.'},{end:.25,name:'II · TEMPLADO Y PREPARACIÓN',info:'La geometría y las propiedades de la aleación condicionan la hoja.'},{end:.37,name:'III · ENTRADA A LA ARENA',info:'Los guerreros avanzan con sus espadas y escudos.'},{end:.50,name:'IV · PRIMER INTERCAMBIO',info:'Ataque frontal y bloqueo: intervienen dureza y resistencia.'},{end:.63,name:'V · CONTRAATAQUE Y ESQUIVA',info:'Los combatientes retroceden, esquivan y vuelven a atacar.'},{end:.76,name:'VI · CHOQUE DE ACERO',info:'El impacto produce flexión, desgaste y posible melladura.'},{end:.87,name:'VII · ÚLTIMO ASALTO',info:'El daño acumulado influye en la resistencia restante.'},{end:1,name:'VIII · VEREDICTO DEL DUELO',info:'El material, la geometría y las técnicas elegidas determinan la ventaja didáctica.'}];
  const sparks=Array.from({length:110},(_,i)=>({a:i*2.39996,r:10+(i*41)%110,v:1+(i%7)*.17,sz:1+i%4}));
  const ground=350, W=1100, H=440;
  function poly(points,fill){ctx.fillStyle=fill;ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.fill()}
@@ -212,14 +213,36 @@ function animate(log){
  function fight(t,scene){
   let x1=330,x2=770,p1='guard',p2='guard',j1=0,j2=0,rot1=0,rot2=0,impact=0,ix=550,iy=209;
   let m1=log.moves[0],m2=log.moves[1];
-  let poseFor=(m,u)=>m==='ataque'?'strike':m==='defensa'?'guard':m==='esquiva'?'dodge':u<.45?'guard':'strike';
+  let poseFor=(m,u)=>m==='ataque'?'strike':m==='defensa'?'guard':m==='esquiva'?'dodge':u<.48?'guard':'riposte';
   if(scene===2){let u=clamp((t-.25)/.12,0,1);x1=100+u*300;x2=1000-u*300;p1='charge';p2='charge';j1=Math.abs(Math.sin(u*13))*9;j2=Math.abs(Math.sin(u*13+2))*9}
   if(scene===3){let u=clamp((t-.37)/.13,0,1);x1=400+Math.sin(u*Math.PI)*90;x2=700-Math.sin(u*Math.PI)*90;p1=poseFor(m1,u);p2=poseFor(m2,u);j1=m1==='esquiva'?75*Math.sin(Math.PI*u):0;j2=m2==='esquiva'?75*Math.sin(Math.PI*u):0;impact=Math.max(0,1-Math.abs(u-.54)*10)}
   if(scene===4){let u=clamp((t-.50)/.13,0,1);x1=440-(m1==='esquiva'?150:65)*Math.sin(u*Math.PI);x2=660+(m2==='esquiva'?150:65)*Math.sin(u*Math.PI);p1=poseFor(m1,1-u);p2=poseFor(m2,1-u);j1=m1==='esquiva'?105*Math.sin(Math.PI*u):15*Math.sin(Math.PI*u);j2=m2==='esquiva'?105*Math.sin(Math.PI*u):15*Math.sin(Math.PI*u);impact=Math.max(0,1-Math.abs(u-.82)*12)}
   if(scene===5){let u=clamp((t-.63)/.13,0,1);x1=395+110*u*(m1==='defensa'?.35:1);x2=705-110*u*(m2==='defensa'?.35:1);p1=poseFor(m1,u);p2=poseFor(m2,u);impact=Math.max(0,1-Math.abs(u-.7)*8)}
   if(scene===6){let u=clamp((t-.76)/.11,0,1);x1=505-95*u;x2=595+95*u;p1=poseFor(m1,u);p2=poseFor(m2,u);impact=Math.max(0,1-Math.abs(u-.14)*7);if(result>=0){if(result===0){rot2=-.14*u;j2=16*u}else{rot1=.14*u;j1=16*u}}}
   if(scene===7){let u=clamp((t-.87)/.13,0,1);x1=410-35*u;x2=690+35*u;p1=result===0?'victory':result===1?'dodge':'guard';p2=result===1?'victory':result===0?'dodge':'guard';rot1=result===1?-.14*u:0;rot2=result===0?.14*u:0}
+  // Cada técnica produce un gesto, trayectoria y efecto distintos.
+  if(scene>=3&&scene<=6){
+   const u=scene===3?clamp((t-.37)/.13,0,1):scene===4?clamp((t-.50)/.13,0,1):scene===5?clamp((t-.63)/.13,0,1):clamp((t-.76)/.11,0,1);
+   if(m1==='ataque'){j1+=16*Math.sin(Math.PI*u);rot1+=-.11*Math.sin(Math.PI*u)}
+   if(m2==='ataque'){j2+=16*Math.sin(Math.PI*u);rot2+=.11*Math.sin(Math.PI*u)}
+   if(m1==='defensa'){x1-=28*Math.sin(Math.PI*u);p1='guard'}
+   if(m2==='defensa'){x2+=28*Math.sin(Math.PI*u);p2='guard'}
+   if(m1==='esquiva'){x1-=72*Math.sin(Math.PI*u);j1+=38*Math.sin(Math.PI*u);rot1+=-.18*Math.sin(Math.PI*u);p1='dodge'}
+   if(m2==='esquiva'){x2+=72*Math.sin(Math.PI*u);j2+=38*Math.sin(Math.PI*u);rot2+=.18*Math.sin(Math.PI*u);p2='dodge'}
+   if(m1==='contraataque'){x1+=24*Math.sin(Math.PI*u);p1=u<.48?'guard':'riposte'}
+   if(m2==='contraataque'){x2-=24*Math.sin(Math.PI*u);p2=u<.48?'guard':'riposte'}
+  }
   fighter(x1,0,p1,t*9,j1,rot1);fighter(x2,1,p2,t*9,j2,rot2);
+  if(scene>=3&&scene<=6){
+   [[m1,x1,0],[m2,x2,1]].forEach(([m,x,side])=>{
+    let y=ground-116,sgn=side?-1:1;ctx.save();
+    if(m==='ataque'){ctx.strokeStyle='#ffb56e';ctx.lineWidth=8;ctx.globalAlpha=.68;ctx.beginPath();ctx.arc(x+sgn*30,y-20,76,side?2.4:-.7,side?4.8:1.8);ctx.stroke()}
+    if(m==='defensa'){ctx.strokeStyle='#8de2fb';ctx.lineWidth=5;ctx.globalAlpha=.52;ctx.beginPath();ctx.ellipse(x+sgn*38,y+12,40,73,0,0,Math.PI*2);ctx.stroke();ctx.strokeStyle='#c8f6ff';ctx.lineWidth=2;ctx.stroke()}
+    if(m==='esquiva'){for(let q=1;q<=3;q++){ctx.strokeStyle='#9cdaf0';ctx.globalAlpha=.4/q;ctx.lineWidth=6-q;ctx.beginPath();ctx.moveTo(x-sgn*q*22,ground-60);ctx.lineTo(x-sgn*q*42,ground-110);ctx.stroke()}}
+    if(m==='contraataque'){ctx.strokeStyle='#b1f2c5';ctx.globalAlpha=.72;ctx.lineWidth=5;ctx.beginPath();ctx.arc(x+sgn*35,y-20,49,side?1.6:-1.6,side?4.8:1.6);ctx.stroke();ctx.beginPath();ctx.moveTo(x+sgn*75,y-45);ctx.lineTo(x+sgn*99,y-64);ctx.stroke()}
+    ctx.restore();
+   });
+  }
   if(scene>=3&&scene<=6){ctx.save();ctx.font='bold 21px Georgia';ctx.textAlign='center';ctx.fillStyle='#c8e9ff';ctx.fillText(MOVES[m1].icon+' '+MOVES[m1].name,x1,ground-255);ctx.fillStyle='#ffd0c5';ctx.fillText(MOVES[m2].icon+' '+MOVES[m2].name,x2,ground-255);ctx.restore()}
   if(impact>0){ctx.save();ctx.globalAlpha=impact*.25;ctx.fillStyle='#fff1b9';ctx.fillRect(0,0,W,H);ctx.restore();sparksAt(ix,iy,1.2+impact*.7,t*3);pulse(ix,iy,1-impact*.9);ctx.strokeStyle='#fff2c4';ctx.lineWidth=2+impact*5;ctx.beginPath();ctx.moveTo(ix-18,iy-45);ctx.lineTo(ix+19,iy+55);ctx.stroke()}
   if(scene===7){let u=(t-.87)/.13;ctx.font='bold 43px Georgia';ctx.textAlign='center';ctx.fillStyle='#f5d08c';ctx.fillText(result<0?'EMPATE DE HONOR':`VICTORIA DEL JUGADOR ${result+1}`,550,125);ctx.textAlign='start';if(result>=0)sparksAt(result===0?375:725,160,.65,u*2,'#f9d785')}

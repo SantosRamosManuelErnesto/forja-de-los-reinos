@@ -124,12 +124,28 @@ function musicSchedule(){if(!music.playing||!music.ctx)return;const ctx=music.ct
 const sfx={last:-1};
 function soundNoise(at,len,vol,highpass=450){const c=music.ctx;if(!c)return;const n=Math.max(32,Math.floor(c.sampleRate*len)),buf=c.createBuffer(1,n,c.sampleRate),data=buf.getChannelData(0);for(let i=0;i<n;i++)data[i]=(Math.random()*2-1)*Math.exp(-i/n*5);const src=c.createBufferSource(),f=c.createBiquadFilter(),g=c.createGain();src.buffer=buf;f.type='highpass';f.frequency.value=highpass;g.gain.setValueAtTime(Math.max(.0001,vol),at);g.gain.exponentialRampToValueAtTime(.0001,at+len);src.connect(f);f.connect(g);g.connect(music.master);src.start(at);src.stop(at+len)}
 function soundGlide(a,b,at,len,vol,type='sine'){const c=music.ctx;if(!c)return;const o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.setValueAtTime(a,at);o.frequency.exponentialRampToValueAtTime(b,at+len);g.gain.setValueAtTime(.0001,at);g.gain.exponentialRampToValueAtTime(vol,at+.012);g.gain.exponentialRampToValueAtTime(.0001,at+len);o.connect(g);g.connect(music.master);o.start(at);o.stop(at+len+.01)}
-function movementSound(move,at){if(!music.playing||music.muted||!music.ctx||music.ctx.state!=='running')return;const c=music.ctx;at=Math.max(c.currentTime+.01,at);switch(move){
- case 'ataque':soundNoise(at,.31,.19,680);soundGlide(560,135,at,.33,.15,'sawtooth');break; // barrido contundente
- case 'defensa':soundNoise(at,.13,.16,1700);soundGlide(1250,650,at,.42,.11,'sine');soundGlide(1850,1050,at,.34,.07,'triangle');break; // bloqueo metálico
- case 'esquiva':soundNoise(at,.43,.075,1050);soundGlide(900,330,at,.31,.06,'sine');break; // roce de capa y aire
- case 'contraataque':soundNoise(at,.10,.11,1600);soundGlide(1100,650,at,.16,.09,'triangle');soundNoise(at+.20,.18,.15,1000);soundGlide(430,820,at+.20,.23,.10,'sawtooth');break; // parada y réplica
- }}
+function metallicRing(at,freq=1250,len=.7,vol=.16){
+ if(!music.ctx)return;[1,1.43,2.07,2.89].forEach((r,i)=>soundGlide(freq*r,freq*r*.84,at,len*(1-i*.13),vol/(i+1),'sine'));
+}
+function movementSound(move,at){
+ if(!music.playing||music.muted||!music.ctx||music.ctx.state!=='running')return;
+ const c=music.ctx;at=Math.max(c.currentTime+.015,at);
+ switch(move){
+ case 'ataque': // Espada pesada: viento descendente + impacto grave
+  soundNoise(at,.42,.32,330);soundGlide(900,95,at,.43,.27,'sawtooth');
+  soundGlide(170,55,at+.29,.21,.19,'triangle');break;
+ case 'defensa': // Escudo y hoja: clang brillante con resonancia larga
+  soundNoise(at,.085,.24,2700);metallicRing(at,1380,.95,.24);
+  soundGlide(280,130,at+.04,.23,.09,'triangle');break;
+ case 'esquiva': // Dos pasos y barrido ligero de capa; sin choque metálico
+  soundNoise(at,.17,.13,850);soundNoise(at+.20,.18,.13,1150);
+  soundGlide(690,220,at,.45,.095,'sine');break;
+ case 'contraataque': // Parada corta seguida de estocada metálica
+  metallicRing(at,1760,.25,.15);soundNoise(at,.065,.16,2400);
+  soundNoise(at+.29,.22,.23,800);soundGlide(340,1000,at+.28,.25,.18,'sawtooth');
+  metallicRing(at+.45,950,.34,.12);break;
+ }
+}
 function clashSound(at){if(!music.playing||music.muted||!music.ctx||music.ctx.state!=='running')return;at=Math.max(music.ctx.currentTime+.01,at);soundNoise(at,.36,.17,1200);soundGlide(1750,480,at,.48,.095,'triangle');soundGlide(820,320,at,.34,.075,'sine')}
 function musicStopVoices(){for(const o of music.voices){try{o.stop()}catch(e){}}music.voices.clear()}
 function musicSetTheme(theme){if(theme!=='battle')theme='menu';if(music.theme===theme)return;music.theme=theme;music.step=0;if(music.ctx){musicStopVoices();music.next=music.ctx.currentTime+.045}musicUpdateUI()}
@@ -180,7 +196,33 @@ function simulate(i){
  let scores=state.players.map((p,j)=>{let a=p.alloy,d=detail[j];let momentum=state.tactics[j]==='ataque'?4*clamp(a.hardness_HV_or_J/250,.7,1.5):state.tactics[j]==='contraataque'&&state.tactics[1-j]==='ataque'?5*clamp(a.E_GPa/180,.7,1.4):state.tactics[j]==='defensa'?3*clamp(a.YS_MPa/650,.7,1.4):state.tactics[j]==='esquiva'?4*clamp(1.5-p.mass/2,.5,1.5):0;return clamp(100-26*p.damage+Math.min(13,a.YS_MPa/160)+Math.min(9,a.hardness_HV_or_J/70)+Math.min(8,a.elongation_pct/6)+Math.min(8,d.ke/140)+momentum,0,140)});
  let winner=scores[0]===scores[1]?-1:scores[0]>scores[1]?0:1;
  if(winner!==-1)state.players[winner].points++;
- let log={round:i,detail,scores,winner,moves:[...state.tactics]};state.logs.push(log);return log;
+ let prevHP=state.logs.length?state.logs[state.logs.length-1].hpAfter:[100,100];
+ // Vida visual: escala didáctica derivada de la severidad de impacto y protección calculadas.
+ // No es una predicción biomédica de lesiones de los combatientes.
+ let hits=[0,1].map(attacker=>{
+  const target=1-attacker,d=detail[target],atk=state.tactics[attacker];
+  const severity=d.bend*.52+d.chip*.25+d.fracture*.23;
+  const attackFactor=atk==='ataque'?1.23:atk==='contraataque'?1.04:atk==='esquiva'?.72:.54;
+  return clamp((5+severity*18)*attackFactor,2,34);
+ });
+ let hpAfter=[Math.max(0,prevHP[0]-hits[1]),Math.max(0,prevHP[1]-hits[0])];
+ let log={round:i,detail,scores,winner,moves:[...state.tactics],hpBefore:[...prevHP],hpAfter,hits};state.logs.push(log);return log;
+}
+function decisiveProperty(log){
+ const w=log.winner;if(w<0)return 'Ambas espadas tuvieron un desempeño similar en esta ronda.';
+ const a=state.players[w],b=state.players[1-w],candidates=[
+  {label:'límite elástico',key:'YS_MPa',unit:'MPa',benefit:1},
+  {label:'resistencia a tracción',key:'UTS_MPa',unit:'MPa',benefit:1},
+  {label:'dureza',key:'hardness_HV_or_J',unit:'HV',benefit:1},
+  {label:'ductilidad (elongación)',key:'elongation_pct',unit:'%',benefit:1},
+  {label:'rigidez elástica',key:'E_GPa',unit:'GPa',benefit:1},
+  {label:'menor masa de hoja',key:'mass',unit:'kg',benefit:-1}
+ ];
+ const move=log.moves[w],priorities=move==='ataque'?['hardness_HV_or_J','UTS_MPa','YS_MPa']:move==='defensa'?['YS_MPa','elongation_pct','UTS_MPa']:move==='esquiva'?['mass','YS_MPa','UTS_MPa']:['E_GPa','YS_MPa','mass'];
+ const rated=candidates.map(c=>{const va=c.key==='mass'?a.mass:a.alloy[c.key],vb=c.key==='mass'?b.mass:b.alloy[c.key];const rel=c.benefit*(va-vb)/Math.max(Math.abs(va),Math.abs(vb),.01);return {...c,va,vb,rel,weight:priorities.includes(c.key)?1.8:1}}).filter(c=>c.rel>.025).sort((x,y)=>y.rel*y.weight-x.rel*x.weight);
+ if(!rated.length)return 'La ventaja provino de la combinación de geometría, energía del golpe y técnica, no de una propiedad aislada.';
+ const top=rated.slice(0,2).map(c=>`${c.label} (${fmt(c.va,c.key==='mass'?2:0)} frente a ${fmt(c.vb,c.key==='mass'?2:0)} ${c.unit})`);
+ return `Destacaron ${top.join(' y ')}. También influyeron el diseño y el movimiento elegido.`;
 }
 function battle(){
  let r=rounds[state.round];
@@ -191,7 +233,7 @@ function battle(){
   $('#see-prev').onclick=()=>$('#history-box').classList.toggle('hidden');return;
  }
  let log=simulate(state.round);
- $('#game-content').innerHTML=head(`FASE 4 · SIMULACIÓN · RONDA ${state.round+1} DE 3`)+`<div class="panel"><div class="row"><h2>${r.name}</h2><span class="chip">${r.description}</span></div><p class="center"><strong>Azul:</strong> ${MOVES[log.moves[0]].icon} ${MOVES[log.moves[0]].name} &nbsp; · &nbsp; <strong>Carmesí:</strong> ${MOVES[log.moves[1]].icon} ${MOVES[log.moves[1]].name}</p><div class="battle-theater" id="battle-theater"><div class="battle-tools"><span class="cinema-help">🎬 Forja · Entrada · Movimientos elegidos · Victoria</span><div><button class="btn secondary" id="cinema-toggle" type="button">⛶ Pantalla completa</button> <button class="btn secondary" id="replay-scene" type="button">↻ Repetir escena</button> <button class="btn secondary" id="skip-scene" type="button">⏭ Saltar</button></div></div><canvas class="arena" id="arena" width="1400" height="560" aria-label="Guerreros de alta resolución con ataques, defensa, esquiva y contraataque"></canvas><p class="motion-note" id="technique-story">Cada movimiento tiene una trayectoria distinta; el resultado depende del material.</p><p id="anim-status" class="center" aria-live="polite">Comienza la secuencia...</p><div id="round-detail" class="hidden"><div class="grid g2">${[0,1].map(j=>`<div class="scorecard"><h3>Jugador ${j+1} · ${MOVES[log.moves[j]].name}</h3><p>Desempeño: <strong>${fmt(log.scores[j])}</strong></p><div class="scorebar"><i style="width:${clamp(log.scores[j]/140*100,0,100)}%"></i></div><p>Daño acumulado: ${fmt(state.players[j].damage)} · Fallo dominante: ${log.detail[j].failure}</p><p class="hint">Energía de la hoja: ${fmt(log.detail[j].ke)} J · Impacto recibido ajustado: ${fmt(log.detail[j].impact)} J</p></div>`).join('')}</div><p class="big center">${log.winner<0?'Ronda empatada':`Ventaja de la ronda: jugador ${log.winner+1}`}</p><div class="center"><button class="btn" id="advance">${state.round===2?'Ver ganador y análisis':'Elegir movimientos de la siguiente ronda'}</button></div></div></div></div>`;
+ $('#game-content').innerHTML=head(`FASE 4 · SIMULACIÓN · RONDA ${state.round+1} DE 3`)+`<div class="panel"><div class="row"><h2>${r.name}</h2><span class="chip">${r.description}</span></div><p class="center"><strong>Azul:</strong> ${MOVES[log.moves[0]].icon} ${MOVES[log.moves[0]].name} &nbsp; · &nbsp; <strong>Carmesí:</strong> ${MOVES[log.moves[1]].icon} ${MOVES[log.moves[1]].name}</p><div class="battle-theater" id="battle-theater"><div class="battle-tools"><span class="cinema-help">🎬 Forja · Ataque azul · Ataque carmesí · Resultado</span><div><button class="btn secondary" id="cinema-toggle" type="button">⛶ Pantalla completa</button> <button class="btn secondary" id="replay-scene" type="button">↻ Repetir escena</button> <button class="btn secondary" id="skip-scene" type="button">⏭ Saltar</button></div></div><canvas class="arena" id="arena" width="1400" height="560" aria-label="Guerreros de alta resolución con ataques, defensa, esquiva y contraataque"></canvas><p class="motion-note" id="technique-story">Cada movimiento tiene una trayectoria distinta; el resultado depende del material.</p><p id="anim-status" class="center" aria-live="polite">Comienza la secuencia...</p><div id="round-detail" class="hidden"><div class="grid g2">${[0,1].map(j=>`<div class="scorecard"><h3>Jugador ${j+1} · ${MOVES[log.moves[j]].name}</h3><p>Desempeño: <strong>${fmt(log.scores[j])}</strong></p><div class="scorebar"><i style="width:${clamp(log.scores[j]/140*100,0,100)}%"></i></div><p>Vida al terminar: ${Math.round(log.hpAfter[j])} % · Daño acumulado: ${fmt(state.players[j].damage)} · Fallo dominante: ${log.detail[j].failure}</p><p class="hint">Energía de la hoja: ${fmt(log.detail[j].ke)} J · Impacto recibido ajustado: ${fmt(log.detail[j].impact)} J</p></div>`).join('')}</div><p class="big center">${log.winner<0?'Ronda empatada':`Ventaja de la ronda: jugador ${log.winner+1}`}</p><p class="motion-note"><strong>¿Qué marcó la diferencia?</strong> ${decisiveProperty(log)}</p><div class="center"><button class="btn" id="advance">${state.round===2?'Ver ganador y análisis':'Elegir movimientos de la siguiente ronda'}</button></div></div></div></div>`;
  setupCinema(log);animate(log);
  const story=$('#technique-story');if(story)story.innerHTML=`<strong>Azul · ${MOVES[log.moves[0]].name}:</strong> ${ADVANTAGES[log.moves[0]]}<br><strong>Carmesí · ${MOVES[log.moves[1]].name}:</strong> ${ADVANTAGES[log.moves[1]]}`;
  $('#advance').onclick=()=>{leaveCinema();if(state.round===2){state.phase=5}else{state.round++;state.tactics=[null,null];state.tacticTurn=0}render();$('#game-content').scrollIntoView({behavior:'smooth',block:'start'})};
@@ -244,7 +286,7 @@ function animate(log){musicSetTheme('battle');
  const duration=reduced?1700:15500, start=performance.now();
  const result=log.winner, damaged=log.detail.map(d=>d.failure);
  let lastAudioScene=-1;const battleMoves=log.moves;
- const scenes=[{end:.12,name:'I · LA FRAGUA DESPIERTA',info:'El metal se calienta antes de recibir los golpes del martillo.'},{end:.25,name:'II · TEMPLADO Y PREPARACIÓN',info:'La geometría y las propiedades de la aleación condicionan la hoja.'},{end:.37,name:'III · ENTRADA A LA ARENA',info:'Los guerreros avanzan con sus espadas y escudos.'},{end:.50,name:'IV · PRIMER INTERCAMBIO',info:'Ataque frontal y bloqueo: intervienen dureza y resistencia.'},{end:.63,name:'V · CONTRAATAQUE Y ESQUIVA',info:'Los combatientes retroceden, esquivan y vuelven a atacar.'},{end:.76,name:'VI · CHOQUE DE ACERO',info:'El impacto produce flexión, desgaste y posible melladura.'},{end:.87,name:'VII · ÚLTIMO ASALTO',info:'El daño acumulado influye en la resistencia restante.'},{end:1,name:'VIII · VEREDICTO DEL DUELO',info:'El material, la geometría y las técnicas elegidas determinan la ventaja didáctica.'}];
+ const scenes=[{end:.12,name:'I · LA FRAGUA DESPIERTA',info:'El metal se calienta en la fragua.'},{end:.25,name:'II · PREPARACIÓN',info:'Los herreros terminan las espadas.'},{end:.37,name:'III · ENTRADA A LA ARENA',info:'Los guerreros se preparan.'},{end:.50,name:'IV · TURNO DEL GUERRERO AZUL',info:'Azul ejecuta su técnica. Carmesí recibe o evita el impacto.'},{end:.63,name:'V · RECUPERACIÓN',info:'Los combatientes toman distancia.'},{end:.76,name:'VI · TURNO DEL GUERRERO CARMESÍ',info:'Carmesí responde con su técnica. Azul recibe o evita el impacto.'},{end:.87,name:'VII · ÚLTIMO INTERCAMBIO',info:'Se observa el daño acumulado en las espadas.'},{end:1,name:'VIII · RESULTADO DE LA RONDA',info:'Las propiedades del material determinan la ventaja del modelo.'}];
  const sparks=Array.from({length:110},(_,i)=>({a:i*2.39996,r:10+(i*41)%110,v:1+(i%7)*.17,sz:1+i%4}));
  const ground=350, W=1100, H=440;
  function poly(points,fill){ctx.fillStyle=fill;ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.fill()}
@@ -281,26 +323,26 @@ function animate(log){musicSetTheme('battle');
   let m1=log.moves[0],m2=log.moves[1];
   let poseFor=(m,u)=>m==='ataque'?'strike':m==='defensa'?'guard':m==='esquiva'?'dodge':u<.48?'guard':'riposte';
   if(scene===2){let u=clamp((t-.25)/.12,0,1);x1=100+u*300;x2=1000-u*300;p1='charge';p2='charge';j1=Math.abs(Math.sin(u*13))*9;j2=Math.abs(Math.sin(u*13+2))*9}
-  if(scene===3){let u=clamp((t-.37)/.13,0,1);x1=400+Math.sin(u*Math.PI)*90;x2=700-Math.sin(u*Math.PI)*90;p1=poseFor(m1,u);p2=poseFor(m2,u);j1=m1==='esquiva'?23*Math.sin(Math.PI*u):0;j2=m2==='esquiva'?23*Math.sin(Math.PI*u):0;impact=Math.max(0,1-Math.abs(u-.54)*10)}
-  if(scene===4){let u=clamp((t-.50)/.13,0,1);x1=440-(m1==='esquiva'?150:65)*Math.sin(u*Math.PI);x2=660+(m2==='esquiva'?150:65)*Math.sin(u*Math.PI);p1=poseFor(m1,1-u);p2=poseFor(m2,1-u);j1=m1==='esquiva'?32*Math.sin(Math.PI*u):15*Math.sin(Math.PI*u);j2=m2==='esquiva'?32*Math.sin(Math.PI*u):15*Math.sin(Math.PI*u);impact=Math.max(0,1-Math.abs(u-.82)*12)}
-  if(scene===5){let u=clamp((t-.63)/.13,0,1);x1=395+110*u*(m1==='defensa'?.35:1);x2=705-110*u*(m2==='defensa'?.35:1);p1=poseFor(m1,u);p2=poseFor(m2,u);impact=Math.max(0,1-Math.abs(u-.7)*8)}
-  if(scene===6){let u=clamp((t-.76)/.11,0,1);x1=505-95*u;x2=595+95*u;p1=poseFor(m1,u);p2=poseFor(m2,u);impact=Math.max(0,1-Math.abs(u-.14)*7);if(result>=0){if(result===0){rot2=-.14*u;j2=16*u}else{rot1=.14*u;j1=16*u}}}
+  if(scene===3){let u=clamp((t-.37)/.13,0,1),swing=Math.sin(Math.PI*u);x1=405+115*swing;x2=695+(m2==='esquiva'?75:-12)*swing;p1=poseFor(m1,u);p2=m2==='esquiva'?'dodge':'guard';j1=12*swing;j2=m2==='esquiva'?15*swing:0;impact=Math.max(0,1-Math.abs(u-.62)*12)}
+  if(scene===4){let u=clamp((t-.50)/.13,0,1);x1=500-90*u;x2=680+15*u;p1='guard';p2='guard';impact=0}
+  if(scene===5){let u=clamp((t-.63)/.13,0,1),swing=Math.sin(Math.PI*u);x1=405-(m1==='esquiva'?75:-12)*swing;x2=695-115*swing;p1=m1==='esquiva'?'dodge':'guard';p2=poseFor(m2,u);j1=m1==='esquiva'?15*swing:0;j2=12*swing;impact=Math.max(0,1-Math.abs(u-.62)*12)}
+  if(scene===6){let u=clamp((t-.76)/.11,0,1);x1=425-20*u;x2=675+20*u;p1=log.hpAfter[0]<log.hpBefore[0]?'dodge':'guard';p2=log.hpAfter[1]<log.hpBefore[1]?'dodge':'guard';rot1=-.08*u;rot2=.08*u}
   if(scene===7){let u=clamp((t-.87)/.13,0,1);x1=410-35*u;x2=690+35*u;p1=result===0?'victory':result===1?'dodge':'guard';p2=result===1?'victory':result===0?'dodge':'guard';rot1=result===1?-.14*u:0;rot2=result===0?.14*u:0}
   // Cada técnica produce un gesto, trayectoria y efecto distintos.
-  if(scene>=3&&scene<=6){
+  if(scene===3||scene===5){
    const u=scene===3?clamp((t-.37)/.13,0,1):scene===4?clamp((t-.50)/.13,0,1):scene===5?clamp((t-.63)/.13,0,1):clamp((t-.76)/.11,0,1);
-   if(m1==='ataque'){j1+=16*Math.sin(Math.PI*u);rot1+=-.11*Math.sin(Math.PI*u)}
-   if(m2==='ataque'){j2+=16*Math.sin(Math.PI*u);rot2+=.11*Math.sin(Math.PI*u)}
-   if(m1==='defensa'){x1-=28*Math.sin(Math.PI*u);p1='guard'}
-   if(m2==='defensa'){x2+=28*Math.sin(Math.PI*u);p2='guard'}
-   if(m1==='esquiva'){x1-=42*Math.sin(Math.PI*u);j1+=8*Math.sin(Math.PI*u);rot1+=-.10*Math.sin(Math.PI*u);p1='dodge'}
-   if(m2==='esquiva'){x2+=42*Math.sin(Math.PI*u);j2+=8*Math.sin(Math.PI*u);rot2+=.10*Math.sin(Math.PI*u);p2='dodge'}
-   if(m1==='contraataque'){x1+=24*Math.sin(Math.PI*u);p1=u<.48?'guard':'riposte'}
-   if(m2==='contraataque'){x2-=24*Math.sin(Math.PI*u);p2=u<.48?'guard':'riposte'}
+   if(scene===3&&m1==='ataque'){j1+=16*Math.sin(Math.PI*u);rot1+=-.11*Math.sin(Math.PI*u)}
+   if(scene===5&&m2==='ataque'){j2+=16*Math.sin(Math.PI*u);rot2+=.11*Math.sin(Math.PI*u)}
+   if(scene===3&&m1==='defensa'){x1-=28*Math.sin(Math.PI*u);p1='guard'}
+   if(scene===5&&m2==='defensa'){x2+=28*Math.sin(Math.PI*u);p2='guard'}
+   if(scene===3&&m1==='esquiva'){x1-=42*Math.sin(Math.PI*u);j1+=8*Math.sin(Math.PI*u);rot1+=-.10*Math.sin(Math.PI*u);p1='dodge'}
+   if(scene===5&&m2==='esquiva'){x2+=42*Math.sin(Math.PI*u);j2+=8*Math.sin(Math.PI*u);rot2+=.10*Math.sin(Math.PI*u);p2='dodge'}
+   if(scene===3&&m1==='contraataque'){x1+=24*Math.sin(Math.PI*u);p1=u<.48?'guard':'riposte'}
+   if(scene===5&&m2==='contraataque'){x2-=24*Math.sin(Math.PI*u);p2=u<.48?'guard':'riposte'}
   }
   fighter(x1,0,p1,t*9,j1,rot1);fighter(x2,1,p2,t*9,j2,rot2);
-  if(scene>=3&&scene<=6){
-   [[m1,x1,0],[m2,x2,1]].forEach(([m,x,side])=>{
+  if(scene===3||scene===5){
+   [[m1,x1,0],[m2,x2,1]].filter((_,j)=>j===(scene===3?0:1)).forEach(([m,x,side])=>{
     let y=ground-116,sgn=side?-1:1;ctx.save();
     if(m==='ataque'){ctx.strokeStyle='#ffb56e';ctx.lineWidth=8;ctx.globalAlpha=.68;ctx.beginPath();ctx.arc(x+sgn*30,y-20,76,side?2.4:-.7,side?4.8:1.8);ctx.stroke()}
     if(m==='defensa'){ctx.strokeStyle='#8de2fb';ctx.lineWidth=5;ctx.globalAlpha=.52;ctx.beginPath();ctx.ellipse(x+sgn*38,y+12,40,73,0,0,Math.PI*2);ctx.stroke();ctx.strokeStyle='#c8f6ff';ctx.lineWidth=2;ctx.stroke()}
@@ -309,24 +351,37 @@ function animate(log){musicSetTheme('battle');
     ctx.restore();
    });
   }
-  if(scene>=3&&scene<=6){ctx.save();ctx.font='bold 21px Georgia';ctx.textAlign='center';ctx.fillStyle='#c8e9ff';ctx.fillText(MOVES[m1].icon+' '+MOVES[m1].name,x1,ground-255);ctx.fillStyle='#ffd0c5';ctx.fillText(MOVES[m2].icon+' '+MOVES[m2].name,x2,ground-255);ctx.restore()}
+  if(scene===3||scene===5){ctx.save();ctx.font='bold 21px Georgia';ctx.textAlign='center';ctx.fillStyle='#c8e9ff';ctx.fillText(MOVES[m1].icon+' '+MOVES[m1].name,x1,ground-255);ctx.fillStyle='#ffd0c5';ctx.fillText(MOVES[m2].icon+' '+MOVES[m2].name,x2,ground-255);ctx.restore()}
   if(impact>0){ctx.save();ctx.globalAlpha=impact*.25;ctx.fillStyle='#fff1b9';ctx.fillRect(0,0,W,H);ctx.restore();sparksAt(ix,iy,1.2+impact*.7,t*3);pulse(ix,iy,1-impact*.9);ctx.strokeStyle='#fff2c4';ctx.lineWidth=2+impact*5;ctx.beginPath();ctx.moveTo(ix-18,iy-45);ctx.lineTo(ix+19,iy+55);ctx.stroke()}
+  if(scene===3||scene===5){
+   const attacker=scene===3?0:1,target=1-attacker,hit=log.hits[attacker],u=scene===3?clamp((t-.37)/.13,0,1):clamp((t-.63)/.13,0,1);
+   const alpha=clamp((u-.58)*9,0,1)*(1-clamp((u-.86)*7,0,1));
+   if(alpha>0){ctx.save();ctx.globalAlpha=alpha;ctx.font='bold 29px Arial';ctx.textAlign='center';ctx.fillStyle='#ffdd9a';ctx.fillText('−'+Math.round(hit)+' VIDA',target===0?380:720,140-42*(u-.58));ctx.restore()}
+  }
   if(scene===7){let u=(t-.87)/.13;ctx.font='bold 43px Georgia';ctx.textAlign='center';ctx.fillStyle='#f5d08c';ctx.fillText(result<0?'EMPATE DE HONOR':`VICTORIA DEL JUGADOR ${result+1}`,550,125);ctx.textAlign='start';if(result>=0)sparksAt(result===0?375:725,160,.65,u*2,'#f9d785')}
  }
  function hud(t,scene){
   ctx.fillStyle='#07111edb';ctx.fillRect(16,12,W-32,62);ctx.strokeStyle='#a68b57';ctx.strokeRect(16,12,W-32,62);
   ctx.fillStyle='#ead2a0';ctx.font='bold 17px Georgia';ctx.textAlign='center';ctx.fillText(scenes[scene].name,W/2,37);
   ctx.fillStyle='#b5c7d9';ctx.font='13px Arial';ctx.fillText(scenes[scene].info,W/2,59);ctx.textAlign='start';
-  for(let j=0;j<2;j++){let x=j?W-263:24,y=88,ratio=Math.max(.08,1-Math.min(.92,state.players[j].damage/170));ctx.fillStyle='#091522bb';ctx.fillRect(x,y,239,49);ctx.strokeStyle=j?'#a75c5d':'#5489b6';ctx.strokeRect(x,y,239,49);ctx.fillStyle='#e6e4d9';ctx.font='bold 13px Arial';ctx.fillText('JUGADOR '+(j+1)+' · '+(j?'CARMESÍ':'AZUL'),x+9,y+17);ctx.fillStyle='#333a46';ctx.fillRect(x+9,y+26,220,10);ctx.fillStyle=j?'#dc696a':'#58b2ef';ctx.fillRect(x+9,y+26,220*ratio,10)}
+  for(let j=0;j<2;j++){
+   let x=j?W-263:24,y=88,health=log.hpBefore[j];
+   if(t>=.37){let u=clamp((t-.37)/.13,0,1);if(j===1)health-=log.hits[0]*clamp((u-.60)/.15,0,1)}
+   if(t>=.63){let u=clamp((t-.63)/.13,0,1);if(j===0)health-=log.hits[1]*clamp((u-.60)/.15,0,1)}
+   health=clamp(health,0,100);let ratio=health/100;
+   ctx.fillStyle='#091522ee';ctx.fillRect(x,y,239,56);ctx.strokeStyle=j?'#a75c5d':'#5489b6';ctx.strokeRect(x,y,239,56);
+   ctx.fillStyle='#e6e4d9';ctx.font='bold 14px Arial';ctx.fillText('JUGADOR '+(j+1)+' · '+Math.round(health)+' % VIDA',x+9,y+19);
+   ctx.fillStyle='#333a46';ctx.fillRect(x+9,y+29,220,15);ctx.fillStyle=health<30?'#e5a450':j?'#dc696a':'#58b2ef';ctx.fillRect(x+9,y+29,220*ratio,15);
+  }
   ctx.fillStyle='#202b39';ctx.fillRect(0,H-8,W,8);ctx.fillStyle='#d9b477';ctx.fillRect(0,H-8,W*t,8);
  }
- function frame(now){if(token!==anim||state.phase!==4)return;let t=Math.min(1,(now-start)/duration),scene=scenes.findIndex(s=>t<=s.end);if(scene<0)scene=7;if(scene!==lastAudioScene){lastAudioScene=scene;if(scene===3||scene===5){movementSound(battleMoves[0],music.ctx?music.ctx.currentTime+.04:0);movementSound(battleMoves[1],music.ctx?music.ctx.currentTime+.18:0)}if(scene===5||scene===6)clashSound(music.ctx?music.ctx.currentTime+.22:0)}let impact=(scene===3||scene===5)?Math.pow(Math.sin(t*150),12)*2.4:0;
+ function frame(now){if(token!==anim||state.phase!==4)return;let t=Math.min(1,(now-start)/duration),scene=scenes.findIndex(s=>t<=s.end);if(scene<0)scene=7;if(scene!==lastAudioScene){lastAudioScene=scene;if(scene===3||scene===5){const attacker=scene===3?0:1;movementSound(battleMoves[attacker],music.ctx?music.ctx.currentTime+.08:0);if(battleMoves[attacker]!=='esquiva')clashSound(music.ctx?music.ctx.currentTime+.56:0)}}let impact=(scene===3||scene===5)?Math.pow(Math.sin(t*150),12)*2.4:0;
   ctx.setTransform(canvas.width/W,0,0,canvas.height/H,0,0);ctx.clearRect(0,0,W,H);environment(t,impact);if(scene<2)forge(t);else fight(t,scene);hud(t,scene);
   $('#anim-status').textContent=scenes[scene].info+' · '+Math.round(t*100)+' %';
   if(t<1)requestAnimationFrame(frame);else{musicSetTheme('menu');$('#anim-status').textContent='Duelo terminado. Consulta el análisis técnico de esta ronda.';$('#round-detail').classList.remove('hidden')}
  }
  requestAnimationFrame(frame)
 }
-function results(){musicSetTheme('menu');let p=state.players;let winner=p[0].points===p[1].points?(p[0].damage===p[1].damage?-1:p[0].damage<p[1].damage?0:1):p[0].points>p[1].points?0:1;let rows=[['Reino','realm'],['Aleación identificada','name'],['Referencia y condición del registro','dataset'],['Densidad (g/cm³)','density_gcm3'],['Módulo de Young (GPa)','E_GPa'],['Límite elástico YS (MPa)','YS_MPa'],['Resistencia última UTS (MPa)','UTS_MPa'],['Elongación (%)','elongation_pct'],['Dureza Vickers (HV)','hardness_HV_or_J']];let params=[['Longitud (cm)','length'],['Anchura (cm)','width'],['Espesor (mm)','thickness'],['Velocidad (m/s)','velocity'],['Ángulo (°)','angle'],['Filo','edge'],['Superficie','treatment'],['Estrategia','style']];$('#game-content').innerHTML=head('FASE 5 · GRIMORIO TÉCNICO Y RESULTADOS')+`<div class="victory-stage"><div class="kicker">🏰 CEREMONIA FINAL DEL TORNEO</div><div class="victory-crown">${winner<0?'⚔️':'👑'}</div><div class="victory-figures">${winner===0?'🛡️🏆⚔️':winner===1?'⚔️🏆🛡️':'🛡️⚔️🛡️'}</div><h2>${winner<0?'Empate técnico':`Victoria del jugador ${winner+1}`}</h2><p>Rondas ganadas: ${p[0].points} — ${p[1].points} · Daño acumulado: ${fmt(p[0].damage)} — ${fmt(p[1].damage)}</p><p>El resultado combina las propiedades del material, el diseño y los movimientos, sin azar. ${activeCatalog===ALLOYS?'Valores de ejemplo para aprender.':'Datos importados: verifica su origen.'}</p></div><details class="learn-more"><summary>📊 Ver propiedades y cálculos de ambos jugadores</summary><section class="section"><h2>Propiedades de las espadas</h2><div class="table-wrap"><table><thead><tr><th>Variable</th><th>Jugador 1</th><th>Jugador 2</th></tr></thead><tbody>${rows.map(([label,key])=>`<tr><td>${label}</td>${p.map(q=>`<td>${safe(typeof q.alloy[key]==='number'?fmt(q.alloy[key]):q.alloy[key])}</td>`).join('')}</tr>`).join('')}<tr><td>Coincidencia con preferencias (índice)</td>${p.map(q=>`<td>${fmt(q.match*100)} %</td>`).join('')}</tr><tr><td>Masa estimada de la hoja (kg)</td>${p.map(q=>`<td>${fmt(q.mass,3)}</td>`).join('')}</tr></tbody></table></div></section><section class="section"><h2>Parámetros de diseño</h2><div class="table-wrap"><table><thead><tr><th>Parámetro</th><th>Jugador 1</th><th>Jugador 2</th></tr></thead><tbody>${params.map(([label,key])=>`<tr><td>${label}</td>${p.map(q=>`<td>${safe(q[key])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section></details><details class="learn-more"><summary>🧪 Ver análisis técnico de las tres rondas</summary><section class="section"><h2>Análisis de las rondas</h2>${state.logs.map(log=>`<article class="panel" style="margin-bottom:12px"><h3>${rounds[log.round].name}</h3><p>Movimientos: Azul ${MOVES[log.moves[0]].name} · Carmesí ${MOVES[log.moves[1]].name}</p><div class="grid g2">${log.detail.map((d,j)=>`<div><strong>Jugador ${j+1}</strong><p>Índice de flexión: ${fmt(d.bend)}<br>Índice ilustrativo de melladura: ${fmt(d.chip)}<br>Índice ilustrativo de fractura: ${fmt(d.fracture)}<br>Energía cinética propia: ${fmt(d.ke)} J<br>Incremento de daño: ${fmt(d.delta)}<br>Fallo dominante: ${d.failure}</p></div>`).join('')}</div><p class="big">${log.winner<0?'Empate de ronda':`Ventaja: jugador ${log.winner+1}`}</p></article>`).join('')}</section><section class="section"><h2>Interpretación científica</h2><div class="callout"><p><strong>Flexión plástica:</strong> el límite elástico YS y la geometría afectan la resistencia relativa al doblamiento. <strong>Daño del filo:</strong> la dureza, la ductilidad y el perfil de filo modifican el índice de melladura. <strong>Fractura:</strong> UTS y elongación sirven como indicadores didácticos, pero no reemplazan K<sub>IC</sub>, Charpy ni pruebas reales de impacto. <strong>Energía:</strong> E<sub>c</sub> = ½mv² se expresa en julios; los índices de daño son adimensionales y sus coeficientes son supuestos didácticos, no parámetros calibrados experimentalmente.</p></div><div class="notice">El catálogo inicial usa valores de ejemplo. Las fuentes están enlazadas, pero no se han cotejado todos sus registros. El combate es una simulación didáctica, no un ensayo real.</div></details><div class="center section"><button class="btn" id="again">¿Deseas volver a jugar?</button> <button class="btn secondary" id="theory-return">Volver a la teoría</button></div></section>`;$('#again').onclick=()=>{reset();window.scrollTo({top:0,behavior:'smooth'})};$('#theory-return').onclick=()=>tab('theory')}
+function results(){musicSetTheme('menu');let p=state.players;let winner=p[0].points===p[1].points?(p[0].damage===p[1].damage?-1:p[0].damage<p[1].damage?0:1):p[0].points>p[1].points?0:1;let rows=[['Reino','realm'],['Aleación identificada','name'],['Referencia y condición del registro','dataset'],['Densidad (g/cm³)','density_gcm3'],['Módulo de Young (GPa)','E_GPa'],['Límite elástico YS (MPa)','YS_MPa'],['Resistencia última UTS (MPa)','UTS_MPa'],['Elongación (%)','elongation_pct'],['Dureza Vickers (HV)','hardness_HV_or_J']];let params=[['Longitud (cm)','length'],['Anchura (cm)','width'],['Espesor (mm)','thickness'],['Velocidad (m/s)','velocity'],['Ángulo (°)','angle'],['Filo','edge'],['Superficie','treatment'],['Estrategia','style']];$('#game-content').innerHTML=head('FASE 5 · GRIMORIO TÉCNICO Y RESULTADOS')+`<div class="victory-stage"><div class="kicker">🏰 CEREMONIA FINAL DEL TORNEO</div><div class="victory-crown">${winner<0?'⚔️':'👑'}</div><div class="victory-figures">${winner===0?'🛡️🏆⚔️':winner===1?'⚔️🏆🛡️':'🛡️⚔️🛡️'}</div><h2>${winner<0?'Empate técnico':`Victoria del jugador ${winner+1}`}</h2><p>Rondas ganadas: ${p[0].points} — ${p[1].points} · Daño acumulado: ${fmt(p[0].damage)} — ${fmt(p[1].damage)}</p><p>El resultado combina las propiedades del material, el diseño y los movimientos, sin azar. La vida es un indicador visual didáctico, no una medida de daño humano. ${activeCatalog===ALLOYS?'Valores de ejemplo para aprender.':'Datos importados: verifica su origen.'}</p></div><details class="learn-more"><summary>📊 Ver propiedades y cálculos de ambos jugadores</summary><section class="section"><h2>Propiedades de las espadas</h2><div class="table-wrap"><table><thead><tr><th>Variable</th><th>Jugador 1</th><th>Jugador 2</th></tr></thead><tbody>${rows.map(([label,key])=>`<tr><td>${label}</td>${p.map(q=>`<td>${safe(typeof q.alloy[key]==='number'?fmt(q.alloy[key]):q.alloy[key])}</td>`).join('')}</tr>`).join('')}<tr><td>Coincidencia con preferencias (índice)</td>${p.map(q=>`<td>${fmt(q.match*100)} %</td>`).join('')}</tr><tr><td>Masa estimada de la hoja (kg)</td>${p.map(q=>`<td>${fmt(q.mass,3)}</td>`).join('')}</tr></tbody></table></div></section><section class="section"><h2>Parámetros de diseño</h2><div class="table-wrap"><table><thead><tr><th>Parámetro</th><th>Jugador 1</th><th>Jugador 2</th></tr></thead><tbody>${params.map(([label,key])=>`<tr><td>${label}</td>${p.map(q=>`<td>${safe(q[key])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section></details><details class="learn-more"><summary>🧪 Ver análisis técnico de las tres rondas</summary><section class="section"><h2>Análisis de las rondas</h2>${state.logs.map(log=>`<article class="panel" style="margin-bottom:12px"><h3>${rounds[log.round].name}</h3><p>Movimientos: Azul ${MOVES[log.moves[0]].name} · Carmesí ${MOVES[log.moves[1]].name}</p><div class="grid g2">${log.detail.map((d,j)=>`<div><strong>Jugador ${j+1}</strong><p>Índice de flexión: ${fmt(d.bend)}<br>Índice ilustrativo de melladura: ${fmt(d.chip)}<br>Índice ilustrativo de fractura: ${fmt(d.fracture)}<br>Energía cinética propia: ${fmt(d.ke)} J<br>Incremento de daño: ${fmt(d.delta)}<br>Fallo dominante: ${d.failure}</p></div>`).join('')}</div><p class="big">${log.winner<0?'Empate de ronda':`Ventaja: jugador ${log.winner+1}`}</p><p><strong>Propiedad destacada:</strong> ${decisiveProperty(log)}</p></article>`).join('')}</section><section class="section"><h2>Interpretación científica</h2><div class="callout"><p><strong>Flexión plástica:</strong> el límite elástico YS y la geometría afectan la resistencia relativa al doblamiento. <strong>Daño del filo:</strong> la dureza, la ductilidad y el perfil de filo modifican el índice de melladura. <strong>Fractura:</strong> UTS y elongación sirven como indicadores didácticos, pero no reemplazan K<sub>IC</sub>, Charpy ni pruebas reales de impacto. <strong>Energía:</strong> E<sub>c</sub> = ½mv² se expresa en julios; los índices de daño son adimensionales y sus coeficientes son supuestos didácticos, no parámetros calibrados experimentalmente.</p></div><div class="notice">El catálogo inicial usa valores de ejemplo. Las fuentes están enlazadas, pero no se han cotejado todos sus registros. El combate es una simulación didáctica, no un ensayo real.</div></details><div class="center section"><button class="btn" id="again">¿Deseas volver a jugar?</button> <button class="btn secondary" id="theory-return">Volver a la teoría</button></div></section>`;$('#again').onclick=()=>{reset();window.scrollTo({top:0,behavior:'smooth'})};$('#theory-return').onclick=()=>tab('theory')}
 reset();
 </script></body></html>

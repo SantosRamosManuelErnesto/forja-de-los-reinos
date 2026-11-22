@@ -210,26 +210,27 @@ function simulate(i){
  let scores=state.players.map((p,j)=>{let a=p.alloy,d=detail[j];let momentum=state.tactics[j]==='ataque'?4*clamp(a.hardness_HV_or_J/250,.7,1.5):state.tactics[j]==='contraataque'&&state.tactics[1-j]==='ataque'?5*clamp(a.E_GPa/180,.7,1.4):state.tactics[j]==='defensa'?3*clamp(a.YS_MPa/650,.7,1.4):state.tactics[j]==='esquiva'?4*clamp(1.5-p.mass/2,.5,1.5):0;return clamp(100-26*p.damage+Math.min(13,a.YS_MPa/160)+Math.min(9,a.hardness_HV_or_J/70)+Math.min(8,a.elongation_pct/6)+Math.min(8,d.ke/140)+momentum,0,140)});
  let winner=scores[0]===scores[1]?-1:scores[0]>scores[1]?0:1;
  if(winner<0)winner=detail[0].delta<=detail[1].delta?0:1;
- state.players[winner].points++;
- // Cada ronda es un duelo independiente: ambos guerreros ejecutan su técnica.
- // El daño mostrado representa la diferencia relativa del desempeño de las espadas.
- // El perdedor llega a 0 % al cierre de la ronda, nunca antes del segundo turno.
+ // Seis golpes alternados. El daño se descuenta directamente de 100 puntos.
+ // La ventaja técnica determina la distribución; el vencedor se decide por la vida restante.
  const prevHP=[100,100];
  const advantage=Math.abs(scores[0]-scores[1]);
- const winnerHP=clamp(55+advantage*.6,55,92);
- const hpAfter=winner===0?[winnerHP,0]:[0,winnerHP];
- const totalLoss=[100-hpAfter[0],100-hpAfter[1]];
- const firstLoss=totalLoss.map((loss,j)=>j===1-winner?Math.min(loss,Math.round(38+Math.min(16,advantage*.25))):loss);
- const finishLoss=totalLoss.map((loss,j)=>loss-firstLoss[j]);
- const hits=[firstLoss[1],firstLoss[0]]; // Ataque azul contra carmesí; ataque carmesí contra azul.
+ const winnerHP=Math.round(clamp(36+advantage*.65,36,84));
+ const totalLoss=winner===0?[100-winnerHP,100]:[100,100-winnerHP];
  const attackDamages=Array(6).fill(0);
+ // Cada jugador causa daño en sus tres turnos; el último golpe al perdedor lo deja en cero.
  for(let attacker=0;attacker<2;attacker++){
-  const total=attacker===0?firstLoss[1]:firstLoss[0];
-  const first=Math.floor(total/3),second=Math.floor((total-first)/2);
-  attackDamages[attacker]=first;attackDamages[attacker+2]=second;attackDamages[attacker+4]=total-first-second;
+  const loss=totalLoss[1-attacker];
+  const first=Math.floor(loss*.29),second=Math.floor(loss*.33);
+  attackDamages[attacker]=first;
+  attackDamages[attacker+2]=second;
+  attackDamages[attacker+4]=loss-first-second;
  }
- const finalHit=finishLoss[1-winner];
- const knockout=true;
+ const hpAfter=[100,100];
+ for(let a=0;a<6;a++)hpAfter[1-a%2]=Math.max(0,hpAfter[1-a%2]-attackDamages[a]);
+ winner=hpAfter[0]===hpAfter[1]?(scores[0]>=scores[1]?0:1):(hpAfter[0]>hpAfter[1]?0:1);
+ state.players[winner].points++;
+ const hits=[totalLoss[1],totalLoss[0]];
+ const finalHit=0,knockout=true;
  let log={round:i,detail,scores,winner,moves:[...state.tactics],hpBefore:[...prevHP],hpAfter,hits,attackDamages,finalHit,knockout};state.logs.push(log);return log;
 }
 function decisiveProperty(log){
@@ -286,7 +287,7 @@ function sword(ctx,x,y,ang,color,scale,fail,t,design){
  if(fail&&t>.76){ctx.strokeStyle='#26303b';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(-half,-len*.48);ctx.lineTo(half,-len*.43);ctx.stroke()}
  ctx.restore();
 }
-function drawFighter(ctx,x,y,side,color,pose,time,health,weaponFailure,design){
+function drawFighter(ctx,x,y,side,color,pose,time,health,weaponFailure,design,unarmed=false){
  const dir=side===0?1:-1, moving=pose==='charge'||pose==='dodge',sway=Math.sin(time*(moving?8:2.8)+side)* (moving?3.5:1.5),stride=Math.sin(time*(moving?10:3.2)+side*Math.PI)*(moving?12:1.8);
  ctx.save();ctx.translate(x,y+sway);ctx.scale(dir,1);let breathing=Math.sin(time*2.6+side)*1.4;ctx.translate(0,breathing);
  // sombra, capa y armadura
@@ -313,7 +314,7 @@ ctx.fillStyle=color;ctx.fillRect(4,-145,12,3);ctx.fillStyle='#d8c18b';ctx.beginP
 
  // brazo armado y espada con posiciones distintas según el movimiento
  const attack=pose==='strike'||pose==='clash'||pose==='victory',arm=pose==='riposte'?[12,-110,52,-149]:attack?[-3,-123,42,-130]:pose==='guard'?[19,-106,38,-119]:pose==='dodge'?[19,-106,35,-76]:pose==='kneel'?[19,-106,33,-56]:[19,-106,39,-83];ctx.strokeStyle='#aebbc8';ctx.lineWidth=12;ctx.beginPath();ctx.moveTo(arm[0],arm[1]);ctx.lineTo(arm[2],arm[3]);ctx.stroke();
- ctx.save();ctx.translate(arm[2],arm[3]);ctx.rotate(pose==='riposte'?-1.32:attack?-.82+Math.sin(time*5)*.16:pose==='guard'?.78:pose==='dodge'?1.35:pose==='kneel'?1.65:.15);ctx.scale(.57,.57);sword(ctx,0,0,0,color,1,weaponFailure,pose==='clash'?0.9:0.2,design);ctx.restore();
+ if(!unarmed){ctx.save();ctx.translate(arm[2],arm[3]);ctx.rotate(pose==='riposte'?-1.32:attack?-.82+Math.sin(time*5)*.16:pose==='guard'?.78:pose==='dodge'?1.35:pose==='kneel'?1.65:.15);ctx.scale(.57,.57);sword(ctx,0,0,0,color,1,weaponFailure,pose==='clash'?0.9:0.2,design);ctx.restore();}
  if(pose==='kneel'){ctx.fillStyle='#f3d7a5';ctx.font='bold 13px Arial';ctx.fillText('RENDIDO',-34,-202)}
  if(pose==='victory'){ctx.fillStyle='#f4d28c';ctx.font='bold 20px Cinzel,serif';ctx.fillText('✦',-9,-208)}
  ctx.restore();
@@ -326,7 +327,7 @@ function animate(log){musicSetTheme('battle');
  let lastAudioScene=-1;const battleMoves=log.moves;
  const scenes=[{end:.12,name:'I · LA FRAGUA DESPIERTA',info:'Las espadas se forjan.'},{end:.25,name:'II · PREPARACIÓN',info:'Los herreros terminan las espadas.'},{end:.34,name:'III · ENTRADA A LA ARENA',info:'Los guerreros se preparan.'},
  ...Array.from({length:6},(_,i)=>({end:.34+(i+1)*.075,name:`${['IV','V','VI','VII','VIII','IX'][i]} · ${['PRIMER','PRIMER','SEGUNDO','SEGUNDO','TERCER','TERCER'][i]} ATAQUE ${i%2?'CARMESÍ':'AZUL'}`,info:`${['Primer','Primer','Segundo','Segundo','Tercer','Tercer'][i]} golpe del guerrero ${i%2?'carmesí':'azul'}.`})),
- {end:.91,name:'X · GOLPE DECISIVO',info:'El perdedor agota su vida y se rinde.'},{end:1,name:'XI · RESULTADO',info:'Se revela el vencedor de la ronda.'}];
+ {end:.91,name:'X · RENDICIÓN',info:'Se compara la vida restante y el perdedor cae de rodillas.'},{end:1,name:'XI · RESULTADO',info:'Se revela el vencedor de la ronda.'}];
  const sparks=Array.from({length:110},(_,i)=>({a:i*2.39996,r:10+(i*41)%110,v:1+(i%7)*.17,sz:1+i%4}));
  const ground=350, W=1100, H=440;
  function poly(points,fill){ctx.fillStyle=fill;ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.fill()}
@@ -345,7 +346,7 @@ function animate(log){musicSetTheme('battle');
   ctx.save();ctx.globalCompositeOperation='screen';for(let i=0;i<sparks.length;i++){let q=sparks[i],u=(t*2.2*q.v+i*.037)%1,rad=q.r*u*power;ctx.fillStyle=i%3?color:'#e4f5ff';ctx.globalAlpha=(1-u)*(.35+(i%5)*.11);ctx.fillRect(x+Math.cos(q.a)*rad,y+Math.sin(q.a)*rad*.62+u*u*48, q.sz,q.sz)}ctx.restore();
  }
  function pulse(x,y,u,color='#f6d38d'){ctx.save();ctx.strokeStyle=color;ctx.globalAlpha=(1-u)*.8;ctx.lineWidth=5*(1-u)+1;ctx.beginPath();ctx.ellipse(x,y,20+u*145,12+u*90,0,0,7);ctx.stroke();ctx.restore()}
- function fighter(x,side,pose,clock,jump=0,tilt=0){ctx.save();ctx.translate(x,ground-jump);ctx.rotate(tilt);drawFighter(ctx,0,0,side,side?'#ff8778':'#6abfff',pose,clock,1,null,state.players[side]);ctx.restore()}
+ function fighter(x,side,pose,clock,jump=0,tilt=0,unarmed=false){ctx.save();ctx.translate(x,ground-jump);ctx.rotate(tilt);drawFighter(ctx,0,0,side,side?'#ff8778':'#6abfff',pose,clock,1,null,state.players[side],unarmed);ctx.restore()}
  function forge(t){
   const stage=t/.25, hammer=stage<.5?Math.abs(Math.sin(stage*35)):Math.abs(Math.sin(stage*19));
   [0,1].forEach(side=>{let x=side?795:305,color=side?'#ff9b7b':'#80c7ff';
@@ -353,7 +354,7 @@ function animate(log){musicSetTheme('battle');
    ctx.fillStyle='#fa742f';ctx.globalAlpha=.2+hammer*.48;ctx.beginPath();ctx.ellipse(x,297,95,53,0,0,7);ctx.fill();ctx.globalAlpha=1;
    sword(ctx,x,286,0,color,.4,null,hammer,state.players[side]);
    sparksAt(x,294,.4+hammer*.5,t*4,'#ffb64e');
-   fighter(x+(side?139:-139),side,stage<.5?'guard':'strike',t*15,0);
+   fighter(x+(side?139:-139),side,stage<.5?'guard':'strike',t*15,0,0,true);
    ctx.save();ctx.translate(x+(side?90:-90),218);ctx.rotate(side?-.6:.6);ctx.rotate(Math.sin(t*120)*.55);ctx.fillStyle='#b5c1cb';ctx.fillRect(-8,-60,16,85);ctx.fillStyle='#59616e';ctx.fillRect(-27,-68,54,23);ctx.restore();
   });
   if(stage>.55){ctx.fillStyle='#9dddfb';ctx.globalAlpha=.3+Math.sin(t*90)**2*.4;ctx.fillRect(285,320,42,15);ctx.fillRect(775,320,42,15);ctx.globalAlpha=1}
@@ -419,7 +420,7 @@ function animate(log){musicSetTheme('battle');
     if(j===1-a%2){const st=.34+a*.075,en=st+.075;
      health-=log.attackDamages[a]*clamp((t-st)/(en-st)*2-1,0,1)}
    }
-   if(t>=.79&&j===1-log.winner)health-=log.finalHit*clamp((t-.79)/.12,0,1);
+   
    health=clamp(health,0,100);let ratio=health/100;
    ctx.fillStyle='#091522ee';ctx.fillRect(x,y,239,56);ctx.strokeStyle=j?'#a75c5d':'#5489b6';ctx.strokeRect(x,y,239,56);
    ctx.fillStyle='#e6e4d9';ctx.font='bold 14px Arial';ctx.fillText('JUGADOR '+(j+1)+' · '+Math.round(health)+'/100 VIDA',x+9,y+19);
